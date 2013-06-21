@@ -35,7 +35,7 @@ module.exports = {
 
     // Try to get view stored in app cache
     if(app){
-      view = app.fetcher.viewStore.get(viewName);
+      view = app.viewStore.get(viewName);
     }
 
     if(!view){
@@ -43,11 +43,11 @@ module.exports = {
       ViewClass = BaseView.getView(viewName);
       view = new ViewClass(options);
       if(app){
-        app.fetcher.viewStore.set(view);
+        app.viewStore.set(view);
       }
     } else {
     // re-initialize view with new options
-      view.initialize(options);
+      view.parseOptions(options);
     }
 
     // create the outerHTML using className, tagName
