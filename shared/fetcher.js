@@ -42,7 +42,6 @@ async = require('async');
 modelUtils = require('./modelUtils');
 ModelStore = require('./store/model_store');
 CollectionStore = require('./store/collection_store');
-ViewStore = require('./store/view_store');
 
 module.exports = Fetcher;
 
@@ -53,9 +52,6 @@ function Fetcher(options) {
     app: this.app
   });
   this.collectionStore = new CollectionStore({
-    app: this.app
-  });
-  this.viewStore = new ViewStore({
     app: this.app
   });
 }

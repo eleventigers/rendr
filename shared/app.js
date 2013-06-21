@@ -10,6 +10,7 @@ var Backbone, ClientRouter, Fetcher;
 require('./globals');
 Backbone = require('backbone');
 Fetcher = require('./fetcher');
+ViewStore = require('./store/view_store');
 
 if (!global.isServer) {
   ClientRouter = require(rendr.entryPath + "/app/router");
@@ -28,6 +29,9 @@ module.exports = Backbone.Model.extend({
    */
   initialize: function() {
     this.fetcher = new Fetcher({
+      app: this
+    });
+    this.viewStore = new ViewStore({
       app: this
     });
     if (!global.isServer) {
