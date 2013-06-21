@@ -450,7 +450,7 @@ BaseView.attach = function(app, parentView) {
         }
       });
       options.app = app;
-      view = app.fetcher.viewStore.get(viewName);
+      view = app.viewStore.get(viewName);
       if(!view){
         ViewClass = BaseView.getView(viewName);
         view = new ViewClass(options);
