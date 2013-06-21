@@ -1,8 +1,9 @@
-var BaseView, Handlebars, modelUtils, templateFinder, _;
+var BaseView, Handlebars, modelUtils, templateFinder, _, qs;
 
 templateFinder = require('./templateFinder');
 Handlebars = require('handlebars');
 _ = require('underscore');
+qs = require('qs');
 
 // Lazy-required.
 BaseView = null;
@@ -53,6 +54,31 @@ module.exports = {
     html = view.getHtml();
 
     return new Handlebars.SafeString(html);
+  },
+
+  currentQuery: function(block){
+    var data, hash, app, query;
+
+    data = block.data || {};
+    hash = block.hash || {};
+
+    app = this._app || data._app;
+
+    if(!global.isServer){
+      query = window.location.search;
+    } else {
+      query = app.req._parsedUrl.query;
+    }
+    if(query){
+      return new Handlebars.SafeString(query);
+    } else {
+      return;
+    }
+  },
+
+  mergeQueries: function(options, block){
+    console.log( options, block.fn(this))
+    return;
   },
 
   partial: function(templateName, block) {
