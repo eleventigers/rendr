@@ -46,7 +46,7 @@ module.exports = {
       }
     } else {
     // re-initialize view with new options
-      view.initialize(options);
+      view.parseOptions(options);
     }
 
     // create the outerHTML using className, tagName
