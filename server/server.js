@@ -1,119 +1,154 @@
-require('../shared/globals');
-
-var _ = require('underscore')
-  , Router = require('./router')
-  , RestAdapter = require('./data_adapter/rest_adapter')
-  , ViewEngine = require('./viewEngine')
-  , middleware = require('./middleware');
+var _ = require('underscore'),
+    express = require('express'),
+    Router = require('./router'),
+    RestAdapter = require('./data_adapter/rest_adapter'),
+    ViewEngine = require('./viewEngine'),
+    middleware = require('./middleware');
 
 module.exports = Server;
 
-function Server(expressApp, options) {
-  this.options = options || {};
-  _.defaults(this.options, this.defaultOptions);
-
-  this.initialize(expressApp);
+function defaultOptions() {
+  return {
+    dataAdapter: null,
+    dataAdapterConfig: null,
+    viewEngine: null,
+    errorHandler: null,
+    notFoundHandler: null,
+    mountPath: null,
+    apiPath: '/api',
+    appData: {},
+    paths: {},
+    viewsPath: null,
+    defaultEngine: 'js',
+    entryPath: process.cwd() + '/',
+    apiProxy: null
+  };
 }
 
-Server.prototype.defaultOptions = {
-  dataAdapter: null,
-  dataAdapterConfig: null,
-  viewEngine: null,
-  router: null,
-  errorHandler: null,
-  dumpExceptions: false,
-  notFoundHandler: null,
-  stashError: null,
-  apiPath: '/api',
-  paths: {}
-};
 
-Server.prototype.initialize = function(expressApp) {
-  this.dataAdapter = this.options.dataAdapter || new RestAdapter(this.options.dataAdapterConfig);;
+function Server(options) {
+  this.options = options || {};
+
+  if (typeof rendr !== 'undefined' && rendr.entryPath) {
+    console.warn("Setting rendr.entryPath is now deprecated. Please pass in \nentryPath when initializing the rendr server.");
+    this.options.entryPath = rendr.entryPath;
+  }
+
+  _.defaults(this.options, defaultOptions());
+
+  this.expressApp = express();
+
+  this.dataAdapter = this.options.dataAdapter || new RestAdapter(this.options.dataAdapterConfig);
+
+  this.initApp = middleware.initApp;
 
   this.viewEngine = this.options.viewEngine || new ViewEngine();
 
-  this.errorHandler = this.options.errorHandler = this.options.errorHandler ||
-    middleware.errorHandler(this.options);
+  this.errorHandler = this.options.errorHandler =
+    this.options.errorHandler || express.errorHandler();
 
   this.router = new Router(this.options);
-
-  /**
-   * Set up default middleware stack.
-   */
-  this.stack = [
-    middleware.initApp(this.options.appData)
-  ];
-
-  this.initExpress(expressApp);
-};
-
-/**
- * Middleware stack
-
- * This is used in front of every Rendr action and every API request which
- * is proxied through `apiProxy`.
- *
- * We provide a default. Apps can append middleware functions,
- * like `server.stack.push(middlewareFn)`, or swap it out
- * entirely, like `server.stack = [middlewareFn]`.
- */
-Server.prototype.stack = null;
-
-/**
- * Attach Rendr's routes to the Express app.
- */
-Server.prototype.initExpress = function(expressApp) {
-  /**
-   * First, we'll add the routes for everything defined in our routes file,
-   * plus the handler for our API proxy endpoint.
-   */
-  this.buildRendrRoutes(expressApp);
-  this.buildApiRoutes(expressApp);
-
-  /**
-   * Add the 404 handler after all other routes. Make sure not to show a 404
-   * for a request to the API proxy.
-   */
-  var apiPath = this.options.apiPath
-    , notApiRegExp = new RegExp('^(?!' + apiPath.replace('/', '\\/') + '\\/)');
-
-  expressApp.get(notApiRegExp, middleware.notFoundHandler());
 
   /**
    * Tell Express to use our ViewEngine to handle .js, .coffee files.
    * This can always be overridden in your app.
    */
-  expressApp.set('views', process.cwd() + '/app/views');
-  expressApp.set('view engine', 'js');
-  expressApp.engine('js',     this.viewEngine.render);
-  expressApp.engine('coffee', this.viewEngine.render);
-};
+  this.expressApp.set('views', this.options.viewsPath || (this.options.entryPath + 'app/views'));
+  this.expressApp.set('view engine', this.options.defaultEngine);
+  this.expressApp.engine(this.options.defaultEngine, this.viewEngine.render);
 
-Server.prototype.buildApiRoutes = function(expressApp) {
-  var fnChain = this.stack.concat(middleware.apiProxy())
-    , apiPath = this.options.apiPath;
+  this._configured = false;
 
-  fnChain.forEach(function(fn) {
-    expressApp.use(apiPath, fn);
+  /**
+  * This is the middleware handler used to mount the Rendr server onto an Express app.
+  */
+  this.__defineGetter__('handle', function() {
+    return function(req, res, next) {
+      /**
+      * Lazily configure the Express app, so the calling application doesn't have to
+      * call `configure()` if it doesn't have any custom middleware.
+      */
+      if (!this._configured) this.configure();
+
+      this.expressApp.handle(req, res, next);
+    }.bind(this);
   });
+}
+
+/**
+ * Attach Rendr's routes to the Express app and setup the middleware stack.
+ * Pass `fn` in order to add custom middleware that should access `req.rendrApp`.
+ */
+Server.prototype.configure = function(fn) {
+  var dataAdapter = this.dataAdapter,
+      apiPath = this.options.apiPath,
+      notApiRegExp = new RegExp('^(?!' + apiPath.replace('/', '\\/') + '\\/)');
+
+  this._configured = true;
+
+  /**
+   * Attach the `dataAdapter` to the `req` so that the `syncer` can access it.
+   */
+  this.expressApp.use(function(req, res, next) {
+    req.dataAdapter = dataAdapter;
+
+    /**
+     * Proxy `res.end` so we can remove the reference to `dataAdapter` to prevent leaks.
+     */
+    var end = res.end;
+    res.end = function(data, encoding) {
+      res.end = end;
+      req.dataAdapter = null;
+      res.end(data, encoding);
+    };
+    next();
+  });
+
+  /**
+   * Initialize the Rendr app, accessible at `req.rendrApp`.
+   */
+  this.expressApp.use(this.initApp(this.options.appData, {
+    apiPath: this.options.apiPath,
+    entryPath: this.options.entryPath,
+    modelUtils: this.options.modelUtils
+  }));
+
+  /**
+   * Add any custom middleware that has to access `req.rendrApp` but should run before
+   * the Rendr routes
+   */
+  fn && fn(this.expressApp);
+
+  /**
+   * Add the API handler.
+   */
+  this.options.apiProxy = this.options.apiProxy || middleware.apiProxy;
+  this.expressApp.use(this.options.apiPath, this.options.apiProxy(dataAdapter));
+
+  /**
+   * Add the routes for everything defined in our routes file.
+   */
+  this.buildRoutes();
+
+  this.expressApp.use(this.errorHandler);
+
+  /**
+   * If a 404 handler is provided, use it for all non-API routes.
+   */
+  if (this.options.notFoundHandler) {
+    this.expressApp.get(notApiRegExp, this.options.notFoundHandler);
+  }
 };
 
-Server.prototype.buildRendrRoutes = function(expressApp) {
-  var routes, path, definition, fnChain;
+Server.prototype.buildRoutes = function() {
+  var routes = this.router.buildRoutes();
 
-  routes = this.router.buildRoutes();
   routes.forEach(function(args) {
-    path = args.shift();
-    definition = args.shift();
-
-    // Additional arguments are more handlers.
-    fnChain = this.stack.concat(args);
-
-    // Have to add error handler AFTER all other handlers.
-    fnChain.push(this.errorHandler);
+    var pattern = args[0],
+        route = args[1],
+        handler = args[2];
 
     // Attach the route to the Express server.
-    expressApp.get(path, fnChain);
+    this.expressApp.get(pattern, handler);
   }, this);
 };

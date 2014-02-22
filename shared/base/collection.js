@@ -1,13 +1,15 @@
-var Backbone, BaseModel, syncer, _, Super;
+var _ = require('underscore'),
+    Backbone = require('backbone'),
+    syncer = require('../syncer'),
+    BaseModel = require('./model'),
+    Super = Backbone.Collection,
+    isServer = (typeof window === 'undefined');
 
-_ = require('underscore');
-Backbone = require('backbone');
-syncer = require('../syncer');
-BaseModel = require('./model');
+if (!isServer) {
+  Backbone.$ = window.$ || require('jquery');
+}
 
-Super = Backbone.Collection;
-
-module.exports = Super.extend({
+BaseCollection = Super.extend({
 
   model: BaseModel,
 
@@ -16,7 +18,7 @@ module.exports = Super.extend({
    */
   defaultParams: null,
 
-  initialize: function(models, options) {
+  constructor: function(models, options) {
     /**
      * Capture the options as instance variable.
      */
@@ -44,7 +46,7 @@ module.exports = Super.extend({
       delete this.options.meta;
     }
 
-    Super.prototype.initialize.apply(this, arguments);
+    Super.apply(this, arguments);
   },
 
   /**
@@ -67,7 +69,7 @@ module.exports = Super.extend({
     if (modifyInstance == null) {
       modifyInstance = true;
     }
-    if (this.jsonKey && (jsonResp = resp[this.jsonKey])) {
+    if (resp != null && this.jsonKey && (jsonResp = resp[this.jsonKey])) {
       if (modifyInstance) {
         meta = _.omit(resp, this.jsonKey);
         _.extend(this.meta, meta);
@@ -103,14 +105,6 @@ module.exports = Super.extend({
     return Super.prototype.fetch.apply(this, arguments);
   },
 
-  lastCheckedFresh: null,
-
-  checkFresh: syncer.checkFresh,
-
-  sync: syncer.getSync(),
-
-  getUrl: syncer.getUrl,
-
   /**
    * Instance method to store the collection and its models.
    */
@@ -121,3 +115,11 @@ module.exports = Super.extend({
     this.app.fetcher.collectionStore.set(this);
   }
 });
+
+/**
+ * Mix-in the `syncer`, shared between `BaseModel` and `BaseCollection`, which
+ * encapsulates logic for fetching data from the API.
+ */
+_.extend(BaseCollection.prototype, syncer);
+
+module.exports = BaseCollection;

@@ -1,17 +1,18 @@
-var BaseCollection, BaseModel, CollectionStore, modelUtils, should, util;
+var should = require('chai').should(),
+    util = require('util'),
+    CollectionStore = require('../../../shared/store/collection_store'),
+    BaseCollection = require('../../../shared/base/collection'),
+    BaseModel = require('../../../shared/base/model'),
+    ModelUtils = require('../../../shared/modelUtils'),
+    modelUtils = new ModelUtils(),
+    AddClassMapping = require('../../helpers/add_class_mapping'),
+    addClassMapping = new AddClassMapping(modelUtils);
 
-should = require('should');
-util = require('util');
-CollectionStore = require('../../../shared/store/collection_store');
-BaseCollection = require('../../../shared/base/collection');
-BaseModel = require('../../../shared/base/model');
-modelUtils = require('../../../shared/modelUtils');
-
-modelUtils.addClassMapping(BaseCollection.name, BaseCollection);
+addClassMapping.add(BaseCollection.name, BaseCollection);
 
 describe('CollectionStore', function() {
   beforeEach(function() {
-    this.store = new CollectionStore;
+    this.store = new CollectionStore({modelUtils: modelUtils});
     this.store.clear();
   });
 
@@ -41,7 +42,8 @@ describe('CollectionStore', function() {
     results = this.store.get(collection.constructor.name, params);
     results.should.eql({
       ids: collection.pluck('id'),
-      meta: meta
+      meta: meta,
+      params: params
     });
   });
 
@@ -83,11 +85,12 @@ describe('CollectionStore', function() {
       params: params
     });
     this.store.set(collection, params);
-    modelUtils.addClassMapping(collection.constructor.name, MyCollection);
+    addClassMapping.add(collection.constructor.name, MyCollection);
     results = this.store.get(collection.constructor.name, params);
     results.should.eql({
       ids: collection.pluck('login'),
-      meta: meta
+      meta: meta,
+      params: params
     });
   });
 
@@ -123,12 +126,14 @@ describe('CollectionStore', function() {
     results0 = this.store.get(collection0.constructor.name, params0);
     results0.should.eql({
       ids: collection0.pluck('id'),
-      meta: {}
+      meta: {},
+      params: params0
     });
     results10 = this.store.get(collection10.constructor.name, params10);
     results10.should.eql({
       ids: collection10.pluck('id'),
-      meta: {}
+      meta: {},
+      params: params10
     });
   });
 

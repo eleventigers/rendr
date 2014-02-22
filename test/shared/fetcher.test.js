@@ -1,16 +1,20 @@
-var App, Listing, Listings, BaseCollection, BaseModel, fetcher, listingResponses,
-  modelUtils, should, _;
+var _ = require('underscore'),
+    chai = require('chai'),
+    should = chai.should(),
+    sinon = require('sinon'),
+    sinonChai = require('sinon-chai'),
+    ModelUtils = require('../../shared/modelUtils'),
+    modelUtils = new ModelUtils(),
+    AddClassMapping = require('../helpers/add_class_mapping'),
+    addClassMapping = new AddClassMapping(modelUtils),
+    BaseModel = require('../../shared/base/model'),
+    BaseCollection = require('../../shared/base/collection'),
+    App = require('../../shared/app'),
+    fetcher = null;
 
-_ = require('underscore');
-should = require('should');
-modelUtils = require('../../shared/modelUtils');
-BaseModel = require('../../shared/base/model');
-BaseCollection = require('../../shared/base/collection');
-App = require('../../shared/app');
+chai.use(sinonChai);
 
-fetcher = null;
-
-listingResponses = {
+var listingResponses = {
   basic: {
     name: 'Fetching!'
   },
@@ -20,7 +24,7 @@ listingResponses = {
   }
 };
 
-Listing = BaseModel.extend({
+var Listing = BaseModel.extend({
   jsonKey: 'listing',
 
   fetch: function(options) {
@@ -37,7 +41,7 @@ Listing = BaseModel.extend({
 });
 Listing.id = 'Listing';
 
-Listings = BaseCollection.extend({
+var Listings = BaseCollection.extend({
   model: Listing,
   jsonKey: 'listings',
 
@@ -62,8 +66,8 @@ Listings = BaseCollection.extend({
 });
 Listings.id = 'Listings';
 
-modelUtils.addClassMapping('Listing', Listing);
-modelUtils.addClassMapping('Listings', Listings);
+addClassMapping.add('Listing', Listing);
+addClassMapping.add('Listings', Listings);
 
 function getModelResponse(version, id, addJsonKey) {
   var resp;
@@ -103,8 +107,66 @@ function buildCollectionResponse(addJsonKey) {
 
 describe('fetcher', function() {
   beforeEach(function() {
-    this.app = new App;
+    this.app = new App(null, {modelUtils: modelUtils});
     fetcher = this.app.fetcher;
+  });
+
+  describe('buildOptions', function () {
+     it('should merge the app with custom options', function () {
+       fetcher.buildOptions().should.be.deep.equal({app: this.app});
+     });
+
+    it('should append specified additional options', function () {
+      fetcher.buildOptions({foo: 'bar'}).should.be.deep.equal({foo: 'bar', app: this.app});
+    });
+
+    it('should merge specified params with specified options that are empty', function () {
+      fetcher.buildOptions(null, {foo: 'bar'}).should.be.deep.equal({foo: 'bar', app: this.app});
+    });
+
+    it('should merge specified params with the specified options', function () {
+      var additionalOptions = {anyOption: 'withValue'},
+        params = {anyParam: 'paramValue'},
+        expected = {
+          app: this.app,
+          anyOption: 'withValue',
+          anyParam: 'paramValue'
+        };
+
+      fetcher.buildOptions(additionalOptions, params).should.be.deep.equal(expected);
+    });
+  });
+
+  describe('getModelOrCollectionForSpec', function () {
+    beforeEach(function () {
+      sinon.stub(modelUtils, 'getModelConstructor').returns(BaseModel);
+      sinon.stub(modelUtils, 'getCollectionConstructor').returns(BaseCollection);
+    });
+
+    afterEach(function () {
+      modelUtils.getModelConstructor.restore();
+      modelUtils.getCollectionConstructor.restore();
+    });
+
+    it('should return an empty model', function () {
+      var model = fetcher.getModelOrCollectionForSpec({ model: 'SomeModel' });
+
+      modelUtils.getModelConstructor.should.have.been.calledOnce;
+      modelUtils.getModelConstructor.should.have.been.calledWith('SomeModel');
+
+      model.should.be.instanceOf(BaseModel);
+      model.attributes.should.be.empty;
+    });
+
+    it('should return an empty collection', function () {
+      var collection = fetcher.getModelOrCollectionForSpec({ collection: 'SomeCollection' });
+
+      modelUtils.getCollectionConstructor.should.have.been.calledOnce;
+      modelUtils.getCollectionConstructor.should.have.been.calledWith('SomeCollection');
+
+      collection.should.be.instanceOf(BaseCollection);
+      collection.should.have.length(0);
+    });
   });
 
   describe('hydrate', function() {
@@ -132,10 +194,11 @@ describe('fetcher', function() {
         }
       };
       fetcher.storeResults(results);
-      hydrated = fetcher.hydrate(fetchSummary);
-      listing = hydrated.listing;
-      listing.should.be.an.instanceOf(Listing);
-      listing.toJSON().should.eql(rawListing);
+      fetcher.hydrate(fetchSummary, function(err, hydrated) {
+        listing = hydrated.listing;
+        listing.should.be.an.instanceOf(Listing);
+        listing.toJSON().should.eql(rawListing);
+      });
     });
 
     it("should be able to store and hydrate a collection", function() {
@@ -170,15 +233,17 @@ describe('fetcher', function() {
         }
       };
       fetcher.storeResults(results);
-      hydrated = fetcher.hydrate(fetchSummary);
-      listings = hydrated.listings;
-      listings.should.be.an.instanceOf(Listings);
-      listings.toJSON().should.eql(rawListings);
-      listings.params.should.eql(params);
-      should.not.exist(fetcher.collectionStore.get('Listings', {}));
-      fetcher.collectionStore.get('Listings', params).should.eql({
-        ids: listings.pluck('id'),
-        meta: {}
+      fetcher.hydrate(fetchSummary, function(err, hydrated) {
+        listings = hydrated.listings;
+        listings.should.be.an.instanceOf(Listings);
+        listings.toJSON().should.eql(rawListings);
+        listings.params.should.eql(params);
+        should.not.exist(fetcher.collectionStore.get('Listings', {}));
+        fetcher.collectionStore.get('Listings', params).should.eql({
+          ids: listings.pluck('id'),
+          meta: {},
+          params: params
+        });
       });
     });
 
@@ -220,13 +285,14 @@ describe('fetcher', function() {
         }
       };
       fetcher.storeResults(results);
-      hydrated = fetcher.hydrate(fetchSummary);
-      listing = hydrated.listing;
-      listing.should.be.an.instanceOf(Listing);
-      should.deepEqual(listing.toJSON(), rawListing);
-      listings = hydrated.listings;
-      listings.should.be.an.instanceOf(Listings);
-      should.deepEqual(listings.toJSON(), rawListings);
+      fetcher.hydrate(fetchSummary, function(err, hydrated) {
+        listing = hydrated.listing;
+        listing.should.be.an.instanceOf(Listing);
+        listing.toJSON().should.deep.equal(rawListing);
+        listings = hydrated.listings;
+        listings.should.be.an.instanceOf(Listings);
+        listings.toJSON().should.deep.equal(rawListings);
+      });
     });
 
     it("should inject the app instance", function() {
@@ -245,11 +311,10 @@ describe('fetcher', function() {
       app = {
         fake: 'app'
       };
-      results = fetcher.hydrate(summaries, {
-        app: app
+      fetcher.hydrate(summaries, {app: app}, function(err, results) {
+        model = results.model;
+        model.app.should.eql(app);
       });
-      model = results.model;
-      model.app.should.eql(app);
     });
   });
 
@@ -341,7 +406,7 @@ describe('fetcher', function() {
         name: 'Some Person'
       };
       someperson = new User(userAttrs);
-      modelUtils.addClassMapping('user', User);
+      addClassMapping.add('user', User);
       fetcher.modelStore.set(someperson);
       fetchSpec = {
         model: {
@@ -360,6 +425,36 @@ describe('fetcher', function() {
         done();
       });
     });
+
+    it("should be able to fetch a model from cache with other attributes", function(done) {
+      var fetchSpec;
+      var listingAttrs = {
+        id: 'myId',
+        name: 'New Name'
+      };
+      listingWithName = new Listing(listingAttrs);
+      fetcher.modelStore.set(listingWithName);
+
+      fetchSpec = {
+        model: {
+          model: 'Listing',
+          params: {
+            name: 'New Name'
+          }
+        }
+      };
+      fetcher.pendingFetches.should.eql(0);
+      fetcher.fetch(fetchSpec, {readFromCache: true}, function(err, results) {
+        fetcher.pendingFetches.should.eql(0);
+        if (err) return done(err);
+        results.model.should.be.an.instanceOf(Listing);
+        results.model.toJSON().should.eql(listingAttrs);
+        done();
+      });
+      fetcher.pendingFetches.should.eql(0);
+
+    });
+
 
     it("should be able to re-fetch if already exists but is missing key", function(done) {
       // First, fetch the collection, which has smaller versions of the models.

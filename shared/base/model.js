@@ -1,45 +1,40 @@
-var _, Backbone, syncer, Super;
+var _ = require('underscore'),
+    Backbone = require('backbone'),
+    syncer = require('../syncer'),
+    isServer = (typeof window === 'undefined');
 
-_ = require('underscore');
-Backbone = require('backbone');
-syncer = require('../syncer');
+if (!isServer) {
+  Backbone.$ = window.$ || require('jquery');
+}
 
-Super = Backbone.Model;
+var BaseModel = Backbone.Model.extend({
 
-module.exports = Super.extend({
-
-  initialize: function(models, options) {
+  constructor: function(models, options) {
     // Capture the options as instance variable.
     this.options = options || {};
 
     // Store a reference to the app instance.
     this.app = this.options.app;
 
-    if (!this.app && this.collection) {
-      this.app = this.collection.app;
+    if (!this.app && this.options.collection) {
+      this.app = this.options.collection.app;
     }
 
-    this.on('change', this.store, this);
+    Backbone.Model.apply(this, arguments);
 
-    Super.prototype.initialize.apply(this, arguments);
+    this.on('change', this.store, this);
   },
 
   /**
    * Idempotent parse
    */
   parse: function(resp) {
-    if (this.jsonKey) {
+    if (resp != null && this.jsonKey) {
       return resp[this.jsonKey] || resp;
     } else {
       return resp;
     }
   },
-
-  checkFresh: syncer.checkFresh,
-
-  sync: syncer.getSync(),
-
-  getUrl: syncer.getUrl,
 
   /**
    * Instance method to store in the modelStore.
@@ -48,3 +43,11 @@ module.exports = Super.extend({
     this.app.fetcher.modelStore.set(this);
   }
 });
+
+/**
+ * Mix-in the `syncer`, shared between `BaseModel` and `BaseCollection`, which
+ * encapsulates logic for fetching data from the API.
+ */
+_.extend(BaseModel.prototype, syncer);
+
+module.exports = BaseModel;

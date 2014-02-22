@@ -1,7 +1,4 @@
-var server, utils, _;
-
-_ = require('underscore');
-utils = require('../utils');
+var _ = require('underscore');
 
 /**
  * The separator used in the path. Incoming paths can look like:
@@ -15,7 +12,7 @@ var separator = '/-/';
  */
 module.exports = apiProxy;
 
-function apiProxy(apiHostsMap) {
+function apiProxy(dataAdapter) {
   return function(req, res, next) {
     var api;
 
@@ -23,19 +20,17 @@ function apiProxy(apiHostsMap) {
 
     api.path = apiProxy.getApiPath(req.path);
     api.api = apiProxy.getApiName(req.path);
+    api.headers = {
+      'x-forwarded-for': apiProxy.getXForwardedForHeader(req.headers, req.ip)
+    };
 
-    rendr.server.dataAdapter.request(req, api, {
+    dataAdapter.request(req, api, {
       convertErrorCode: false
     }, function(err, response, body) {
-      var status;
-
       if (err) return next(err);
 
-      // Pass through statusCode, but not if it's an i.e. 304.
-      status = response.statusCode;
-      if (utils.isErrorStatus(status)) {
-        res.status(status);
-      }
+      // Pass through statusCode.
+      res.status(response.statusCode);
       res.json(body);
     });
   };
@@ -54,4 +49,15 @@ apiProxy.getApiName = function getApiName(path) {
     apiName = path.substr(1, sepIndex - 1);
   }
   return apiName;
+};
+
+apiProxy.getXForwardedForHeader = function (headers, clientIp) {
+  var existingHeader = headers['x-forwarded-for'],
+      newHeaderValue = clientIp;
+
+  if (existingHeader) {
+    newHeaderValue = existingHeader + ', ' + clientIp;
+  }
+
+  return newHeaderValue;
 };

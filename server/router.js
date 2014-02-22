@@ -1,9 +1,7 @@
-var BaseRouter, ServerRouter, ExpressRouter, sanitize, _;
-
-_ = require('underscore');
-BaseRouter = require('../shared/base/router');
-ExpressRouter = require('express').Router;
-sanitize = require('validator').sanitize;
+var _ = require('underscore'),
+    BaseRouter = require('../shared/base/router'),
+    ExpressRouter = require('express').Router,
+    sanitizer = require('sanitizer');
 
 module.exports = ServerRouter;
 
@@ -24,7 +22,7 @@ ServerRouter.prototype.constructor = ServerRouter;
 ServerRouter.prototype.escapeParams = function(params) {
   var escaped = {};
   _.each(params, function(value, key) {
-    escaped[sanitize(key).xss()] = sanitize(value).xss();
+    escaped[sanitizer.sanitize(key)] = sanitizer.sanitize(value);
   });
   return escaped;
 };
@@ -32,9 +30,14 @@ ServerRouter.prototype.escapeParams = function(params) {
 ServerRouter.prototype.getParams = function(req) {
   var params = _.clone(req.query || {});
 
-  req.route.keys.forEach(function(routeKey) {
-    params[routeKey.name] = req.route.params[routeKey.name];
-  });
+  if (req.route.regexp) {
+    _.extend(params, req.params);
+  } else {
+    req.route.keys.forEach(function(routeKey) {
+      params[routeKey.name] = req.params[routeKey.name];
+    });
+  }
+
   params = this.escapeParams(params);
   return params;
 };
@@ -47,10 +50,11 @@ ServerRouter.prototype.getHandler = function(action, pattern, route) {
   var router = this;
 
   return function(req, res, next) {
-    var app, context, params, redirect;
+    var params = router.getParams(req),
+        redirect = router.getRedirect(route, params),
+        app = req.rendrApp,
+        context;
 
-    params = router.getParams(req);
-    redirect = router.getRedirect(route, params);
     /**
      * If `redirect` is present, then do a redirect and return.
      */
@@ -59,20 +63,26 @@ ServerRouter.prototype.getHandler = function(action, pattern, route) {
       return;
     }
 
-    app = req.rendrApp;
     context = {
       currentRoute: route,
       app: app,
-      redirectTo: function(url) {
-        res.redirect(url);
+      redirectTo: function(uri, options) {
+        uri = (app.get('rootPath') || '') + uri;
+        if (options !== undefined && options.status) {
+          res.redirect(options.status, uri);
+        }
+        else {
+          res.redirect(uri);
+        }
       }
     };
 
     action.call(context, params, function(err, viewPath, locals) {
-      if (err) return router.handleErr(err, req, res);
+      if (err) return next(err);
 
       var defaults = router.defaultHandlerParams(viewPath, locals, route);
-      viewPath = defaults[0], locals = defaults[1];
+      viewPath = defaults[0];
+      locals = defaults[1];
 
       var viewData = {
         locals: locals || {},
@@ -81,7 +91,7 @@ ServerRouter.prototype.getHandler = function(action, pattern, route) {
       };
 
       res.render(viewPath, viewData, function(err, html) {
-        if (err) return router.handleErr(err, req, res);
+        if (err) return next(err);
         res.set(router.getHeadersForRoute(route));
         res.type('html').end(html);
       });
@@ -96,33 +106,12 @@ ServerRouter.prototype.addExpressRoute = function(routeObj) {
   this._expressRouter.route('get', path, []);
 };
 
-/**
- * Handle an error that happens while executing an action.
- * Could happen during the controller action, view rendering, etc.
- */
-ServerRouter.prototype.handleErr = function(err, req, res) {
-  this.stashError(req, err);
-
-  var errorHandler = this.options.errorHandler;
-
-  errorHandler(err, req, res);
-};
-
 ServerRouter.prototype.getHeadersForRoute = function(definition) {
   var headers = {};
   if (definition.maxAge != null) {
     headers['Cache-Control'] = "public, max-age=" + definition.maxAge;
   }
   return headers;
-};
-
-/**
- * stash error, if handler available
- */
-ServerRouter.prototype.stashError = function(req, err) {
-  if (this.options.stashError != null) {
-    this.options.stashError(req, err);
-  }
 };
 
 /**

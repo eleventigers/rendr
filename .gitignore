@@ -1,3 +1,13 @@
 node_modules
 tmp
 npm-debug.log
+coverage
+*.sw?
+examples/*/node_modules
+examples/**/compiledTemplates.js
+examples/*/public/mergedAssets.js
+examples/*/public/testBundle.js
+examples/*/public/styles.css
+examples/*/public/js/*
+.DS_Store
+runtime.json

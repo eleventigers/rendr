@@ -1,21 +1,18 @@
-/*global rendr*/
-
 /**
  * This is the app instance that is shared between client and server.
  * The client also subclasses it for client-specific stuff.
  */
 
-var Backbone, ClientRouter, Fetcher;
+var Backbone = require('backbone'),
+    Fetcher = require('./fetcher'),
+    ModelUtils = require('./modelUtils'),
+    isServer = (typeof window === 'undefined'),
+    ClientRouter;
 
-require('./globals');
-Backbone = require('backbone');
-Fetcher = require('./fetcher');
-
-if (!global.isServer) {
-  ClientRouter = require(rendr.entryPath + "/app/router");
+if (!isServer) {
+  ClientRouter = require('app/router');
+  Backbone.$ = window.$ || require('jquery');
 }
-
-function noop() {}
 
 module.exports = Backbone.Model.extend({
 
@@ -27,8 +24,17 @@ module.exports = Backbone.Model.extend({
   /**
    * @shared
    */
-  initialize: function(attributes, options) {
+  constructor: function(attributes, options) {
+    attributes = attributes || {};
     this.options = options || {};
+
+    var entryPath = this.options.entryPath || '';
+    if (!isServer) {
+      // the entry path must always be empty for the client
+      entryPath =  '';
+    }
+
+    this.modelUtils = this.options.modelUtils || new ModelUtils(entryPath);
 
     /**
      * On the server-side, you can access the Express request, `req`.
@@ -40,8 +46,12 @@ module.exports = Backbone.Model.extend({
     /**
      * Initialize the `templateAdapter`, allowing application developers to use whichever
      * templating system they want.
+     *
+     * We can't use `this.get('templateAdapter')` here because `Backbone.Model`'s
+     * constructor has not yet been called.
      */
-    this.templateAdapter = require(this.get('templateAdapter'));
+    var templateAdapterModule = attributes.templateAdapter || this.defaults.templateAdapter;
+    this.templateAdapter = require(templateAdapterModule)({entryPath: entryPath});
 
     /**
      * Instantiate the `Fetcher`, which is used on client and server.
@@ -53,26 +63,35 @@ module.exports = Backbone.Model.extend({
     /**
      * Initialize the `ClientRouter` on the client-side.
      */
-    if (!global.isServer) {
+    if (!isServer) {
       new ClientRouter({
-        app: this
+        app: this,
+        entryPath: entryPath,
+        appViewClass: this.getAppViewClass(),
+        rootPath: attributes.rootPath
       });
     }
 
-    /**
-     * Call `postInitialize()`, to make it easy for an application to easily subclass and add custom
-     * behavior without having to call i.e. `BaseApp.prototype.initialize.apply(this, arguments)`.
-     */
-    this.postInitialize();
-  },
+    Backbone.Model.apply(this, arguments);
 
-  postInitialize: noop,
+    if (this.postInitialize) {
+      console.warn('`postInitialize` is deprecated, please use `initialize`');
+      this.postInitialize();
+    }
+  },
 
   /**
    * @shared
    */
   fetch: function() {
     this.fetcher.fetch.apply(this.fetcher, arguments);
+  },
+
+  /**
+   * @client
+   */
+  getAppViewClass: function () {
+    return require('../client/app_view');
   },
 
   /**
@@ -87,5 +106,6 @@ module.exports = Backbone.Model.extend({
    */
   start: function() {
     this.router.start();
+    this.trigger('start');
   }
 });

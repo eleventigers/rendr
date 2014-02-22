@@ -1,12 +1,12 @@
-var BaseModel, ModelStore, modelUtils, should, _, util;
-
-util = require('util');
-_ = require('underscore');
-should = require('should');
-ModelStore = require('../../../shared/store/model_store');
-BaseModel = require('../../../shared/base/model');
-modelUtils = require('../../../shared/modelUtils');
-
+var util = require('util'),
+    _ = require('underscore'),
+    should = require('chai').should(),
+    ModelStore = require('../../../shared/store/model_store'),
+    BaseModel = require('../../../shared/base/model'),
+    ModelUtils = require('../../../shared/modelUtils'),
+    modelUtils = new ModelUtils(),
+    AddClassMapping = require('../../helpers/add_class_mapping'),
+    addClassMapping = new AddClassMapping(modelUtils);
 
 function MyModel() {
   MyModel.super_.apply(this, arguments);
@@ -15,13 +15,14 @@ util.inherits(MyModel, BaseModel);
 
 function App() {}
 
-modelUtils.addClassMapping(modelUtils.modelName(MyModel), MyModel);
+addClassMapping.add(modelUtils.modelName(MyModel), MyModel);
 
 describe('ModelStore', function() {
   beforeEach(function() {
-    this.app = new App;
+    this.app = new App({modelUtils: modelUtils});
     this.store = new ModelStore({
-      app: this.app
+      app: this.app,
+      modelUtils: modelUtils
     });
   });
 
@@ -92,5 +93,37 @@ describe('ModelStore', function() {
     this.store.set(model);
     result = this.store.get('my_model', 1);
     result.should.eql(finalModelAttrs);
+  });
+  describe('find', function(){
+    function MySecondModel() {
+      MySecondModel.super_.apply(this, arguments);
+    }
+    util.inherits(MySecondModel, BaseModel);
+
+    addClassMapping.add(modelUtils.modelName(MySecondModel), MySecondModel);
+
+    it('should find a model on custom attributes', function(){
+      var model, modelAttrs, result;
+      modelAttrs = {
+        foo: 'bar',
+        id: 1
+      };
+      model = new MyModel(modelAttrs);
+      this.store.set(model);
+      result = this.store.find('my_model', {foo: 'bar'});
+      result.should.eql(modelAttrs);
+    });
+
+    it('should skip different models, even when they match the query', function(){
+      var model, modelAttrs, result;
+      modelAttrs = {
+        foo: 'bar',
+        id: 1
+      };
+      model = new MySecondModel(modelAttrs);
+      this.store.set(model);
+      result = this.store.find('my_model', {foo: 'bar'});
+      should.equal(result, undefined);
+    });
   });
 });

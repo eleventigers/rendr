@@ -1,23 +1,21 @@
-/*global rendr*/
+/**
+ * Since we make rendr files AMD friendly on app setup stage
+ * we need to pretend that this code is pure commonjs
+ * means no AMD-style require calls
+ */
+var requireAMD = require;
 
-var AppView, Backbone, BaseRouter, BaseView, ClientRouter, extractParamNamesRe, firstRender, plusRe, _;
+var _ = require('underscore'),
+    Backbone = require('backbone'),
+    BaseRouter = require('../shared/base/router'),
+    BaseView = require('../shared/base/view'),
+    $ = (typeof window !== 'undefined' && window.$) || require('jquery'),
+    extractParamNamesRe = /:(\w+)/g,
+    plusRe = /\+/g,
+    firstRender = true,
+    defaultRootPath = '';
 
-_ = require('underscore');
-Backbone = require('backbone');
-BaseRouter = require('../shared/base/router');
-BaseView = require('../shared/base/view');
-
-try {
-  AppView = require(rendr.entryPath + 'app/views/app_view');
-} catch (e) {
-  AppView = require('../shared/base/app_view');
-}
-
-extractParamNamesRe = /:(\w+)/g;
-
-plusRe = /\+/g;
-
-firstRender = true;
+Backbone.$ = $;
 
 function noop() {}
 
@@ -38,18 +36,18 @@ ClientRouter.prototype.currentFragment = null;
 
 ClientRouter.prototype.previousFragment = null;
 
-/*
+/**
  * In a controller action, can access the current route
  * definition with `this.currentRoute`.
  */
 ClientRouter.prototype.currentRoute = null;
 
-/*
+/**
  * Instance of Backbone.Router used to manage browser history.
  */
 ClientRouter.prototype._router = null;
 
-/*
+/**
  * We need to reverse the routes in the client because
  * Backbone.History matches in reverse.
  */
@@ -57,6 +55,8 @@ ClientRouter.prototype.reverseRoutes = true;
 
 ClientRouter.prototype.initialize = function(options) {
   this.app = options.app;
+
+  var AppView = this.options.appViewClass;
 
   // We do this here so that it's available in AppView initialization.
   this.app.router = this;
@@ -76,43 +76,49 @@ ClientRouter.prototype.initialize = function(options) {
 
 ClientRouter.prototype.postInitialize = noop;
 
-/*
+/**
  * Piggyback on adding new route definition events
  * to also add to Backbone.Router.
  */
 ClientRouter.prototype.addBackboneRoute = function(routeObj) {
   var handler, name, pattern, route;
 
-  pattern = routeObj[0];
+  // Backbone.History wants no leading slash on strings.
+  pattern = (routeObj[0] instanceof RegExp) ? routeObj[0] : routeObj[0].slice(1);
   route = routeObj[1];
   handler = routeObj[2];
   name = route.controller + ":" + route.action;
 
-  // Backbone.History wants no leading slash.
-  this._router.route(pattern.slice(1), name, handler);
+  this._router.route(pattern, name, handler);
 };
 
 ClientRouter.prototype.getHandler = function(action, pattern, route) {
   var router = this;
 
+  // abstract action call
+  function actionCall(action, params) {
+    action.call(router, params, router.getRenderCallback(route));
+  }
+
   // This returns a function which is called by Backbone.history.
   return function() {
-    var params, paramsArray, views, redirect;
+    var params, paramsArray, redirect;
 
     router.trigger('action:start', route, firstRender);
     router.currentRoute = route;
 
     if (firstRender) {
-      views = BaseView.attach(router.app);
-      router.currentView = router.getMainView(views);
-      router.trigger('action:end', route, firstRender);
       firstRender = false;
+      BaseView.attach(router.app, null, function(views) {
+        router.currentView = router.getMainView(views);
+        router.trigger('action:end', route, true);
+      });
     } else {
       paramsArray = _.toArray(arguments);
       params = router.getParamsHash(pattern, paramsArray, window.location.search);
 
       redirect = router.getRedirect(route, params);
-      /*
+      /**
        * If `redirect` is present, then do a redirect and return.
        */
       if (redirect != null) {
@@ -120,14 +126,26 @@ ClientRouter.prototype.getHandler = function(action, pattern, route) {
       } else {
         if (!action) {
           throw new Error("Missing action \"" + route.action + "\" for controller \"" + route.controller + "\"");
+        } else if (typeof action == 'string') {
+          // in AMD environment action is the string containing path to the controller
+          // which will be loaded async (might be preloaded)
+          // Only used in AMD environment
+          requireAMD([action], function(controller) {
+            // check we have everything we need
+            if (typeof controller[route.action] != 'function') {
+              throw new Error("Missing action \"" + route.action + "\" for controller \"" + route.controller + "\"");
+            }
+            actionCall(controller[route.action], params);
+          });
+        } else {
+          actionCall(action, params);
         }
-        action.call(router, params, router.getRenderCallback(route));
       }
     }
   };
 };
 
-/*
+/**
  * Can be overridden by applications
  * if the initial render is more complicated.
  */
@@ -138,23 +156,36 @@ ClientRouter.prototype.getMainView = function(views) {
   });
 };
 
-/*
+/**
  * Proxy to Backbone.Router.
  */
-ClientRouter.prototype.navigate = function() {
-  this._router.navigate.apply(this._router, arguments);
+ClientRouter.prototype.navigate = function(path, options) {
+  var fragment = Backbone.history.getFragment(path);
+
+  // check if local router can handle route
+  if (this.matchesAnyRoute(fragment)) {
+    this._router.navigate.apply(this._router, arguments);
+  } else {
+    this.redirectTo(fragment, {pushState: false});
+  }
 };
 
 ClientRouter.prototype.getParamsHash = function(pattern, paramsArray, search) {
   var paramNames, params, query;
 
-  paramNames = (pattern.match(extractParamNamesRe) || []).map(function(name) {
-    return name.slice(1);
-  });
-  params = paramNames.reduce(function(memo, name, i) {
+  if (pattern instanceof RegExp) {
+    paramNames = paramsArray.map(function(val, i) { return String(i); });
+  } else {
+    paramNames = (pattern.match(extractParamNamesRe) || []).map(function(name) {
+      return name.slice(1);
+    });
+  }
+
+  params = (paramNames || []).reduce(function(memo, name, i) {
     memo[name] = decodeURIComponent(paramsArray[i]);
     return memo;
   }, {});
+
   query = search.slice(1).split('&').reduce(function(memo, queryPart) {
     var parts = queryPart.split('=');
     if (parts.length > 1) {
@@ -162,6 +193,7 @@ ClientRouter.prototype.getParamsHash = function(pattern, paramsArray, search) {
     }
     return memo;
   }, {});
+
   return _.extend(query, params);
 };
 
@@ -207,9 +239,15 @@ ClientRouter.prototype.redirectTo = function(path, options) {
   }
 };
 
+ClientRouter.prototype.handleErr = function(err, route) {
+  this.trigger('action:error', err, route);
+}
+
 ClientRouter.prototype.getRenderCallback = function(route) {
   return function(err, viewPath, locals) {
-    var View;
+    if (err) return this.handleErr(err, route);
+
+    var View, _router = this;
 
     if (this.currentView) {
       this.currentView.remove();
@@ -219,14 +257,16 @@ ClientRouter.prototype.getRenderCallback = function(route) {
     viewPath = defaults[0], locals = defaults[1];
 
     locals = locals || {};
+    _.extend(locals, { fetch_summary: BaseView.extractFetchSummary(this.app.modelUtils, locals) });
 
     // Inject the app.
     locals.app = this.app;
-    View = this.getView(viewPath);
-    this.currentView = new View(locals);
-    this.renderView();
+    this.getView(viewPath, this.options.entryPath, function(View) {
+      _router.currentView = new View(locals);
+      _router.renderView();
 
-    this.trigger('action:end', route, firstRender);
+      _router.trigger('action:end', route, firstRender);
+    });
   }.bind(this);
 };
 
@@ -237,7 +277,8 @@ ClientRouter.prototype.renderView = function() {
 ClientRouter.prototype.start = function() {
   Backbone.history.start({
     pushState: true,
-    hashChange: false
+    hashChange: false,
+    root: this.options.rootPath || defaultRootPath
   });
 };
 
@@ -246,10 +287,13 @@ ClientRouter.prototype.trackAction = function() {
   this.currentFragment = Backbone.history.getFragment();
 };
 
-ClientRouter.prototype.getView = function(key) {
-  var View = BaseView.getView(key);
-  if (!_.isFunction(View)) {
-    throw new Error("View '" + key + "' not found.");
-  }
-  return View;
+ClientRouter.prototype.getView = function(key, entryPath, callback) {
+  var View = BaseView.getView(key, entryPath, function(View) {
+    // TODO: Make it function (err, View)
+    if (!_.isFunction(View)) {
+      throw new Error("View '" + key + "' not found.");
+    }
+
+    callback(View);
+  });
 };

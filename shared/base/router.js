@@ -1,16 +1,33 @@
-/*global rendr*/
+var _ = require('underscore'),
+  Backbone = require('backbone'),
+  isServer = (typeof window === 'undefined'),
+  isAMDEnvironment = !isServer && (typeof define !== 'undefined');
 
-var Backbone, BaseRouter, noop, _;
-
-_ = require('underscore');
-Backbone = require('backbone');
+if (!isServer) {
+  Backbone.$ = window.$ || require('jquery');
+}
 
 function noop() {}
 
-module.exports = BaseRouter;
+function stringRouteDefinitionToObject(element) {
+  var parts = element.split('#');
+  return {
+    controller: parts[0],
+    action: parts[1]
+  };
+}
+
+function parseRouteDefinitions(definitions) {
+  return definitions.reduce(function(route, element) {
+    if (_.isString(element)) {
+      element = stringRouteDefinitionToObject(element);
+    }
+    return _.extend(route, element);
+  }, {});
+}
 
 /**
- * Base router class shared betwen ClientRouter and ServerRouter.
+ * Base router class shared between ClientRouter and ServerRouter.
  */
 function BaseRouter(options) {
   this.route = this.route.bind(this);
@@ -19,179 +36,162 @@ function BaseRouter(options) {
   this.initialize(options);
 }
 
-/**
- * Config
- *   - errorHandler: function to correctly handle error
- *   - paths
- *     - entryPath (required)
- *     - routes (optional)
- *     - controllerDir (optional)
- *   - stashError: optional function to notify server of error
- */
-BaseRouter.prototype.options = null;
+_.extend(BaseRouter.prototype, Backbone.Events, {
+  /**
+   * Config
+   *   - errorHandler: function to correctly handle error
+   *   - paths
+   *     - entryPath (required)
+   *     - routes (optional)
+   *     - controllerDir (optional)
+   */
+  options: null,
 
-/**
- * Internally stored route definitions.
- */
-BaseRouter.prototype._routes = null;
+  /**
+   * Internally stored route definitions.
+   */
+  _routes: null,
 
-BaseRouter.prototype.reverseRoutes = false;
+  reverseRoutes: false,
 
-BaseRouter.prototype.initialize = function(options) {};
+  initialize: noop,
 
-BaseRouter.prototype._initOptions = function(options) {
-  var paths;
+  _initOptions: function(options) {
+    var entryPath;
 
-  this.options = options || {};
-  paths = this.options.paths = this.options.paths || {};
-  paths.entryPath = paths.entryPath || rendr.entryPath;
-  paths.routes = paths.routes || paths.entryPath + '/app/routes';
-  paths.controllerDir = paths.controllerDir || paths.entryPath + '/app/controllers';
-};
+    options = options || {};
+    options.paths = options.paths || {};
 
-BaseRouter.prototype.getController = function(controllerName) {
-  var controllerDir, controller;
-  controllerDir = this.options.paths.controllerDir;
-  try {
-    controller = require(controllerDir + "/" + controllerName + "_controller");
-  } catch (e) {
-    controller = undefined;
-  }
-  return controller;
-};
+    entryPath = options.paths.entryPath || options.entryPath;
+    options.paths = _.defaults(options.paths, {
+      entryPath: entryPath,
+      routes: entryPath + 'app/routes',
+      controllerDir: entryPath + 'app/controllers'
+    });
 
-/**
- * Given an object with 'controller' and 'action' properties,
- * return the corresponding action function.
- */
-BaseRouter.prototype.getAction = function(route) {
-  var controller, action;
-  controller = this.getController(route.controller);
-  if (controller) {
-    action = controller[route.action];
-  } else {
-    action = undefined;
-  }
-  return action;
-};
+    this.options = options;
+  },
 
-BaseRouter.prototype.getRedirect = function(route, params) {
-  var redirect = route.redirect;
-  if (redirect != null) {
-    /**
-     * Support function and string.
-     */
+  getControllerPath: function(controllerName) {
+    var controllerDir = this.options.paths.controllerDir;
+    return controllerDir + '/' + controllerName + '_controller';
+  },
+
+  loadController: function(controllerName) {
+    var controllerPath = this.getControllerPath(controllerName);
+    return require(controllerPath);
+  },
+
+  getAction: function(route) {
+    var controller, action;
+
+    if (route.controller) {
+      if (isAMDEnvironment) {
+        action = this.getControllerPath(route.controller);
+      } else {
+        controller = this.loadController(route.controller);
+        action = controller[route.action];
+      }
+    }
+
+    return action;
+  },
+
+  getRedirect: function(route, params) {
+    var redirect = route.redirect;
+
     if (typeof redirect === 'function') {
       redirect = redirect(params);
     }
-  }
-  return redirect;
-};
 
-/**
- * Build route definitions based on the routes file.
- */
-BaseRouter.prototype.buildRoutes = function() {
-  var routeBuilder, routes, _this = this;
+    return redirect;
+  },
 
-  function captureRoutes() {
-    routes.push(_.toArray(arguments));
-  }
+  getRouteBuilder: function() {
+    return require(this.options.paths.routes);
+  },
 
-  routeBuilder = require(this.options.paths.routes);
-  routes = [];
+  buildRoutes: function() {
+    var routeBuilder = this.getRouteBuilder(),
+      routes = [];
 
-  try {
+    function captureRoutes() {
+      routes.push(_.toArray(arguments));
+    }
+
     routeBuilder(captureRoutes);
     if (this.reverseRoutes) {
       routes = routes.reverse();
     }
-    routes.forEach(function(route) {
-      _this.route.apply(_this, route);
-    });
-  } catch (e) {
-    throw new Error("Error building routes: " + e.message);
-  }
-  return this.routes();
-};
 
-/**
- * Returns a copy of current route definitions.
- */
-BaseRouter.prototype.routes = function() {
-  return this._routes.slice().map(function(route) {
-    return route.slice();
-  });
-};
+    routes.forEach(this.addRouteDefinition, this);
 
-/**
- * Method passed to routes file to build up routes definition.
- * Adds a single route definition.
- */
-BaseRouter.prototype.route = function(pattern) {
-  var action, definitions, handler, route, routeObj;
+    return this.routes();
+  },
 
-  definitions = _.toArray(arguments).slice(1);
-  route = this.parseDefinitions(definitions);
-  action = this.getAction(route);
-  if (pattern.slice(0, 1) !== '/') {
-    pattern = "/" + pattern;
-  }
-  handler = this.getHandler(action, pattern, route);
-  routeObj = [pattern, route, handler];
-  this._routes.push(routeObj);
-  this.trigger('route:add', routeObj);
-  return routeObj;
-};
-
-BaseRouter.prototype.parseDefinitions = function(definitions) {
-  var route;
-
-  route = {};
-  definitions.forEach(function(element) {
-    var parts;
-
-    /**
-     * Handle i.e. 'users#show'.
-     */
-    if (_.isString(element)) {
-      parts = element.split('#');
-      _.extend(route, {
-        controller: parts[0],
-        action: parts[1]
-      });
-    } else {
-      /**
-       * Handle objects ,i.e. {controller: 'users', action: 'show'}.
-       */
-      _.extend(route, element);
+  addRouteDefinition: function(route) {
+    try {
+      this.route.apply(this, route);
+    } catch (error) {
+      error.message = 'Error building routes (' + error.message + ')';
+      throw error;
     }
-  });
-  return route;
+  },
+
+  /**
+   * Returns a copy of current route definitions.
+   */
+  routes: function() {
+    return this._routes.slice().map(function(route) {
+      return route.slice();
+    });
+  },
+
+  /**
+   * Method passed to routes file to build up routes definition.
+   * Adds a single route definition.
+   */
+  route: function(pattern) {
+    var action, definitions, handler, route, routeObj;
+
+    definitions = _.toArray(arguments).slice(1);
+    route = parseRouteDefinitions(definitions);
+    action = this.getAction(route);
+
+    if (!(pattern instanceof RegExp) && pattern.slice(0, 1) !== '/') {
+      pattern = "/" + pattern;
+    }
+
+    handler = this.getHandler(action, pattern, route);
+    routeObj = [pattern, route, handler];
+    this._routes.push(routeObj);
+    this.trigger('route:add', routeObj);
+    return routeObj;
+  },
+
+  /**
+   * Support omitting view path; default it to ":controller/:action".
+   */
+  defaultHandlerParams: function(viewPath, locals, route) {
+    if (typeof viewPath !== 'string') {
+      locals = viewPath;
+      viewPath = route.controller + '/' + route.action;
+    }
+    return [viewPath, locals];
+  },
+
+  /**
+   * Methods to be extended by subclasses.
+   * -------------------------------------
+   */
+
+  /**
+   * This is the method that renders the request.
+   */
+  getHandler: noop
+});
+
+module.exports = BaseRouter;
+module.exports.setAMDEnvironment = function(flag) {
+  isAMDEnvironment = flag;
 };
-
-/**
- * Support omitting view path; default it to ":controller/:action".
- */
-BaseRouter.prototype.defaultHandlerParams = function(viewPath, locals, route) {
-  if (typeof viewPath !== 'string') {
-    locals = viewPath;
-    viewPath = route.controller + '/' + route.action;
-  }
-  return [viewPath, locals];
-};
-
-/**
- * Methods to be extended by subclasses.
- * -------------------------------------
- */
-
-/**
- * This is the method that renders the request.
- */
-BaseRouter.prototype.getHandler = noop;
-
-/**
- * Mix in Backbone.Events.
- */
-_.extend(BaseRouter.prototype, Backbone.Events);
